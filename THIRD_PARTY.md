@@ -1,0 +1,5 @@
+# Third-party components
+
+- AndroidX Compose, Jetpack Media3, Kotlin, and Gradle: Apache License 2.0. Standard AndroidX/Gradle dependencies are resolved from Google Maven and Maven Central.
+- The APK includes the unmodified [Jellyfin AndroidX Media3 FFmpeg decoder 1.6.1+1](https://central.sonatype.com/artifact/org.jellyfin.media3/media3-ffmpeg-decoder/1.6.1+1), published under GPL-3.0 (see COPYING). Its corresponding [decoder build source](https://github.com/jellyfin/jellyfin-androidx-media/tree/d1b37871a833298dc82a732302094a5b1fa7e87a) pins [AndroidX Media3](https://github.com/androidx/media/tree/ae9a2339679826f870690092509a135dffc0d7e4) and [FFmpeg](https://github.com/FFmpeg/FFmpeg/tree/b67a6631a27e63e1040ef8b484b20b657798b227). To rebuild the decoder, clone the upstream tag `v1.6.1+1` with submodules, follow its build workflow, and point the app dependency at the locally rebuilt AAR. FFmpeg's license notices are included in its source tree.
+- The two Overtone Sessions samples are original synthesized tracks; see `tools/make-demo.py`.

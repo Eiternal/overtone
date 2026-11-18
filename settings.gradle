@@ -1,0 +1,13 @@
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        if (file('vendor').isDirectory()) maven { url = uri('vendor') }
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'Overtone'
+include ':app'
