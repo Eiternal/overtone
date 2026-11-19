@@ -3,6 +3,9 @@ package com.overtone.player
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.LruCache
@@ -16,6 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -29,19 +35,22 @@ internal data class Artwork(
 
 private class ArtworkCache {
     private class Result(val artwork: Artwork?)
-    private val results = LruCache<Pair<String, String>, Result>(10)
+    private val results = object : LruCache<Triple<String, String, Int>, Result>(24 * 1024 * 1024) {
+        override fun sizeOf(key: Triple<String, String, Int>, value: Result): Int =
+            value.artwork?.let { it.cover.width * it.cover.height * 4 + 4096 } ?: 4096
+    }
 
-    fun read(context: Context, track: Track): Artwork? {
-        val key = track.uri to track.artwork
+    fun read(context: Context, track: Track, pixels: Int): Artwork? {
+        val key = Triple(track.uri, track.artwork, pixels)
         results.get(key)?.let { return it.artwork }
-        val bitmap = readArtworkBitmap(context, track, 820)
+        val bitmap = readArtworkBitmap(context, track, pixels)
         val result = bitmap?.let(::analyzeArtwork)
         results.put(key, Result(result))
         return result
     }
 }
 
-private fun readArtworkBitmap(context: Context, track: Track, maxSide: Int): Bitmap? {
+private fun readArtworkBitmap(context: Context, track: Track, pixels: Int, square: Boolean = false): Bitmap? {
     val embedded = if (track.uri.startsWith("content:")) runCatching {
         val source = MediaMetadataRetriever()
         try {
@@ -51,10 +60,10 @@ private fun readArtworkBitmap(context: Context, track: Track, maxSide: Int): Bit
             source.release()
         }
     }.getOrNull() else null
-    return embedded?.let { bytes -> decodeArtwork(maxSide) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, it) } }
+    return embedded?.let { bytes -> decodeArtwork(pixels, square) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, it) } }
         ?: track.artwork.takeIf { it.isNotBlank() }?.let { address ->
             runCatching {
-                decodeArtwork(maxSide) { options ->
+                decodeArtwork(pixels, square) { options ->
                     context.contentResolver.openInputStream(Uri.parse(address))?.use {
                         BitmapFactory.decodeStream(it, null, options)
                     }
@@ -63,7 +72,7 @@ private fun readArtworkBitmap(context: Context, track: Track, maxSide: Int): Bit
         }
         ?: if (track.uri.startsWith("asset:///demo/")) {
             runCatching {
-                decodeArtwork(maxSide) { options ->
+                decodeArtwork(pixels, square) { options ->
                     context.assets.open("demo/sessions.webp").use { input ->
                         BitmapFactory.decodeStream(input, null, options)
                     }
@@ -72,38 +81,64 @@ private fun readArtworkBitmap(context: Context, track: Track, maxSide: Int): Bit
         } else null
 }
 
-private fun decodeArtwork(maxSide: Int, read: (BitmapFactory.Options) -> Bitmap?): Bitmap? {
+private fun decodeArtwork(pixels: Int, square: Boolean, read: (BitmapFactory.Options) -> Bitmap?): Bitmap? {
     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     read(options)
     if (options.outWidth <= 0 || options.outHeight <= 0) return null
-    options.inSampleSize = 1
-    while (maxOf(options.outWidth, options.outHeight) / options.inSampleSize > maxSide * 1.25f) options.inSampleSize *= 2
+    val longSide = maxOf(options.outWidth, options.outHeight)
+    val targetSide = if (square) minOf(options.outWidth, options.outHeight) else longSide
+    var sample = 1
+    while (targetSide / (sample * 2) >= pixels || longSide / sample > 3072) sample *= 2
+    options.inSampleSize = sample
     options.inJustDecodeBounds = false
     options.inPreferredConfig = Bitmap.Config.ARGB_8888
-    return read(options)
+    val bitmap = read(options) ?: return null
+    val scaled = if (square) {
+        val side = minOf(bitmap.width, bitmap.height)
+        val size = minOf(side, pixels)
+        if (bitmap.width == size && bitmap.height == size) return bitmap
+        val left = (bitmap.width - side) / 2
+        val top = (bitmap.height - side) / 2
+        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also {
+            Canvas(it).drawBitmap(bitmap, Rect(left, top, left + side, top + side),
+                Rect(0, 0, size, size), Paint(Paint.FILTER_BITMAP_FLAG))
+        }
+    } else {
+        val size = maxOf(bitmap.width, bitmap.height)
+        if (size <= pixels) return bitmap
+        Bitmap.createScaledBitmap(bitmap, (bitmap.width * pixels / size).coerceAtLeast(1),
+            (bitmap.height * pixels / size).coerceAtLeast(1), true)
+    }
+    if (scaled !== bitmap) bitmap.recycle()
+    return scaled
 }
 
+private data class ThumbnailKey(val uri: String, val artwork: String, val revision: Int, val pixels: Int)
 private data class Thumbnail(val cover: ImageBitmap?)
-private val thumbnails = LruCache<Triple<String, String, Int>, Thumbnail>(108)
+private val thumbnails = object : LruCache<ThumbnailKey, Thumbnail>(16 * 1024 * 1024) {
+    override fun sizeOf(key: ThumbnailKey, value: Thumbnail): Int =
+        value.cover?.let { it.width * it.height * 4 } ?: 4096
+}
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 private val thumbnailIO = Dispatchers.IO.limitedParallelism(3)
 
-@Composable internal fun rememberThumbnail(tracks: List<Track>, revision: Int): ImageBitmap? {
+@Composable internal fun rememberThumbnail(tracks: List<Track>, revision: Int, size: Dp): ImageBitmap? {
     val context = LocalContext.current.applicationContext
+    val pixels = artworkPixelBucket(with(LocalDensity.current) { size.roundToPx() }, 32, 768)
     val candidates = remember(tracks) {
         val first = tracks.take(6)
         (first + listOfNotNull(tracks.firstOrNull { it.artwork.isNotBlank() })).distinctBy(Track::uri)
     }
     var result by remember(candidates) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(candidates, revision) {
+    LaunchedEffect(candidates, revision, pixels) {
         result = withContext(thumbnailIO) {
             candidates.firstNotNullOfOrNull { track ->
                 ensureActive()
-                val key = Triple(track.uri, track.artwork, revision)
+                val key = ThumbnailKey(track.uri, track.artwork, revision, pixels)
                 val cached = thumbnails.get(key)
                 if (cached != null) cached.cover
                 else {
-                    val bitmap = runCatching { readArtworkBitmap(context, track, 232) }.getOrNull()
+                    val bitmap = runCatching { readArtworkBitmap(context, track, pixels, square = true) }.getOrNull()
                     val cover = bitmap?.asImageBitmap()
                     thumbnails.put(key, Thumbnail(cover))
                     cover
@@ -118,14 +153,18 @@ internal data class ArtworkSelection(val backdrop: Artwork?, val cover: ImageBit
 
 @Composable internal fun rememberArtwork(track: Track?, scan: Int): ArtworkSelection {
     val context = LocalContext.current.applicationContext
+    val pixels = artworkPixelBucket(LocalWindowInfo.current.containerSize.width, 128, 2048)
     val cache = remember(scan) { ArtworkCache() }
     var result by remember { mutableStateOf<Artwork?>(null) }
-    LaunchedEffect(cache, track?.uri, track?.artwork) {
-        result = if (track == null) null else withContext(Dispatchers.IO) { cache.read(context, track) }
+    LaunchedEffect(cache, track?.uri, track?.artwork, pixels) {
+        result = if (track == null) null else withContext(Dispatchers.IO) { cache.read(context, track, pixels) }
     }
     val active = result.takeIf { track != null }
     return ArtworkSelection(active, active?.cover)
 }
+
+private fun artworkPixelBucket(pixels: Int, step: Int, limit: Int): Int =
+    ((pixels.coerceIn(1, limit) + step - 1) / step) * step
 
 private fun analyzeArtwork(bitmap: Bitmap): Artwork {
     val size = 32

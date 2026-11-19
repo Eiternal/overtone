@@ -260,10 +260,29 @@ data class Deck(val track: Track? = null, val playing: Boolean = false, val queu
         query = ""
         searchOpen = false
     }
+    val foldersByParent = remember(library.folders) { library.folders.groupBy(Folder::parent) }
+    val foldersById = remember(library.folders) { library.folders.associateBy(Folder::id) }
+    val tracksByFolder = remember(library.tracks) { library.tracks.groupBy(Track::folder) }
+
+    fun openFolder(folder: Folder) {
+        var destination = folder
+        while (destination.id !in tracksByFolder) {
+            val child = foldersByParent[destination.id]?.singleOrNull() ?: break
+            destination = child
+        }
+        selectedFolder = destination.id
+    }
+
     fun browseBack() {
         if (searchOpen) closeSearch()
         else if (selectedAlbum.isNotEmpty()) selectedAlbum = ""
-        else if (selectedFolder.isNotEmpty()) selectedFolder = library.folders.firstOrNull { it.id == selectedFolder }?.parent.orEmpty()
+        else if (selectedFolder.isNotEmpty()) {
+            var parent = foldersById[selectedFolder]?.parent.orEmpty()
+            while (parent.isNotEmpty() && parent !in tracksByFolder && foldersByParent[parent]?.size == 1) {
+                parent = foldersById[parent]?.parent.orEmpty()
+            }
+            selectedFolder = parent
+        }
     }
     BackHandler(playerOpen || selectedFolder.isNotEmpty() || selectedAlbum.isNotEmpty() || searchOpen) {
         if (playerOpen) playerOpen = false else browseBack()
@@ -334,12 +353,12 @@ data class Deck(val track: Track? = null, val playing: Boolean = false, val queu
                 (fadeIn(tween(145, delayMillis = 35)) + slideInHorizontally(tween(240, easing = Ease)) { it / 24 }) togetherWith fadeOut(tween(100))
             }, label = "library") { location ->
                 val (page, folder, album) = location
-                val activeFolder = library.folders.firstOrNull { it.id == folder }
-                val directory = remember(library.folders, folder) { library.folders.filter { it.parent == folder } }
+                val activeFolder = foldersById[folder]
+                val directory = foldersByParent[folder].orEmpty()
                 val visible = remember(search, library.tracks, page, folder, album, favorites) {
                     when {
                         search.isNotEmpty() -> library.tracks.filter { t -> listOf(t.title, t.file, t.artist, t.album).any { it.contains(search, true) } }
-                        page == 0 && folder.isNotEmpty() -> library.tracks.filter { it.folder == folder }
+                        page == 0 && folder.isNotEmpty() -> tracksByFolder[folder].orEmpty()
                         page == 1 && album.isNotEmpty() -> albumGroups[album].orEmpty()
                         page == 2 -> library.tracks
                         page == 3 -> (library.tracks + demoTracks).filter { isFavorite(it) }
@@ -387,7 +406,7 @@ data class Deck(val track: Track? = null, val playing: Boolean = false, val queu
                             }
                         }
                         items(directory, key = { it.id }) { item ->
-                            FolderRow(item.title, item.count) { selectedFolder = item.id }
+                            FolderRow(item.title, item.count) { openFolder(item) }
                         }
                     }
                     items(visible, key = { it.uri }) { track ->
@@ -564,10 +583,11 @@ data class Deck(val track: Track? = null, val playing: Boolean = false, val queu
 }
 
 @Composable private fun AlbumTile(name: String, tracks: List<Track>, revision: Int, open: () -> Unit) {
-    val cover = rememberThumbnail(tracks, revision)
     val artist = remember(tracks) { tracks.firstNotNullOfOrNull { it.artist.takeIf(String::isNotBlank) }.orEmpty() }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = open)) {
-        Cover(cover, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp)))
+        BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp))) {
+            Cover(rememberThumbnail(tracks, revision, maxWidth), Modifier.fillMaxSize())
+        }
         Label(name, Modifier.padding(top = 8.dp, start = 1.dp), size = 15, weight = FontWeight.SemiBold)
         if (artist.isNotBlank()) Label(artist, Modifier.padding(start = 1.dp, bottom = 1.dp), color = Dim, size = 12)
     }
@@ -575,14 +595,15 @@ data class Deck(val track: Track? = null, val playing: Boolean = false, val queu
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun TrackRow(track: Track, revision: Int, active: Boolean, play: () -> Unit, more: () -> Unit) {
-    val thumbnail = rememberThumbnail(remember(track) { listOf(track) }, revision)
+    val coverSize = 40.dp
+    val thumbnail = rememberThumbnail(remember(track) { listOf(track) }, revision, coverSize)
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.heightIn(min = 68.dp).clip(RoundedCornerShape(8.dp))
             .background(if (active) AccentWell.copy(alpha = .44f) else Color.Transparent), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f).heightIn(min = 68.dp).clip(RoundedCornerShape(8.dp))
                 .combinedClickable(onClick = play, onLongClick = more)
                 .padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(40.dp).clip(RoundedCornerShape(7.dp)), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(coverSize).clip(RoundedCornerShape(7.dp)), contentAlignment = Alignment.Center) {
                     Cover(thumbnail, Modifier.fillMaxSize())
                     if (active) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .65f)),
                         contentAlignment = Alignment.Center) { Glyph("mark", Modifier.size(20.dp), Paper) }

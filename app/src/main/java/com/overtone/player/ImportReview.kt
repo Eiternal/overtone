@@ -85,10 +85,11 @@ internal fun ImportReview(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)) {
             items(rows, key = { it.track.favoriteKey }) { candidate ->
                 val track = candidate.track
-                val thumbnail = rememberThumbnail(remember(track) { listOf(track) }, revision)
+                val coverSize = 44.dp
+                val thumbnail = rememberThumbnail(remember(track) { listOf(track) }, revision, coverSize)
                 Row(Modifier.fillMaxWidth().heightIn(min = 72.dp), verticalAlignment = Alignment.CenterVertically) {
                     val playing = preview == track
-                    Box(Modifier.size(44.dp).clip(RoundedCornerShape(7.dp))
+                    Box(Modifier.size(coverSize).clip(RoundedCornerShape(7.dp))
                         .clickable(role = Role.Button) {
                             previewFailed = null
                             if (playing) preview = null

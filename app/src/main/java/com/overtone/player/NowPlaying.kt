@@ -241,7 +241,7 @@ private fun artworkHeight(cover: ImageBitmap?, width: Dp, height: Dp): Dp =
                                 drawContent()
                                 drawRect(edgeFade, blendMode = BlendMode.DstIn)
                             }
-                        }, contentScale = ContentScale.Fit)
+                        }, contentScale = ContentScale.Fit, filterQuality = FilterQuality.Medium)
                 }
             }
         }
@@ -331,7 +331,7 @@ private fun reducedAnimations(context: android.content.Context) =
 }
 
 @Composable internal fun Cover(image: ImageBitmap?, modifier: Modifier) {
-    if (image != null) Image(image, null, modifier, contentScale = ContentScale.Crop)
+    if (image != null) Image(image, null, modifier, contentScale = ContentScale.Crop, filterQuality = FilterQuality.Medium)
     else Box(modifier.background(Brush.linearGradient(listOf(Raised, Panel, Ink))),
         contentAlignment = Alignment.Center) {
         BoxWithConstraints(contentAlignment = Alignment.Center) {
